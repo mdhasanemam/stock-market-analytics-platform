@@ -1,5 +1,10 @@
 # StockLens — Stock Market Analytics & Forecasting Platform
 
+![CI](https://github.com/mdhasanemam/stock-market-analytics-platform/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 A FastAPI + Plotly web application for exploring stock prices and technical indicators, and for **honestly** testing machine-learning forecasts:
 chronological walk-forward validation, no look-ahead, and every model scored against naive baselines.
 
@@ -7,6 +12,24 @@ Evolved from the notebooks in [`mdhasanemam/stock-price-prediction`](https://git
 [`docs/TECHNICAL_ASSESSMENT.md`](docs/TECHNICAL_ASSESSMENT.md) for what was wrong with the originals and what changed).
 
 > **Educational use only — not investment advice.** Forecasts are statistical estimates, not guaranteed prices.
+
+## Screenshots
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01-home.png" alt="Home page with featured stocks"><br><sub><b>Home</b> — featured stocks and trend labels</sub></td>
+    <td><img src="docs/screenshots/02-dashboard.png" alt="Dashboard with candlesticks, Bollinger Bands, RSI and MACD"><br><sub><b>Dashboard</b> — candlesticks, overlays, RSI, MACD</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/04-predict.png" alt="Forecast page with backtest and future forecast"><br><sub><b>Forecast</b> — out-of-sample backtest vs future forecast</sub></td>
+    <td><img src="docs/screenshots/05-compare.png" alt="Model comparison leaderboard"><br><sub><b>Model comparison</b> — leaderboard vs naive baselines</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/03-dashboard-light.png" alt="Light theme"><br><sub><b>Light theme</b></sub></td>
+    <td><img src="docs/screenshots/06-watchlist.png" alt="Watchlist"><br><sub><b>Watchlist</b></sub></td>
+  </tr>
+</table>
+
+_Screenshots were captured with `scripts/capture_screenshots.py` (see below). If they show a "Demo mode" banner, they use the bundled 2017 sample data, not live prices._
 
 ## Features
 | Area | What you get |
@@ -26,7 +49,15 @@ cp .env.example .env            # DATA_PROVIDER=yfinance (live) or csv (offline 
 python -m uvicorn backend.app.main:app --reload     # http://localhost:8000
 python -m pytest -q
 ```
+**Windows (PowerShell):**
+```powershell
+python -m venv .venv; .venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+copy .env.example .env
+python -m uvicorn backend.app.main:app --reload
+```
 Offline demo without internet: `DATA_PROVIDER=csv` (bundled AAPL/FB/MSFT/TSLA daily data, ending 2017-11-10 — a banner reminds you it is not current).
+Regenerate screenshots: `pip install playwright && python -m playwright install chromium`, start the app, then `python scripts/capture_screenshots.py`.
 Docker: `docker compose up --build` (see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)).
 
 ## How the ML is done (and why)
@@ -51,6 +82,11 @@ Docker: `docker compose up --build` (see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.
 Take-away: on daily data, most of the apparent "skill" is the market's average upward drift. Margins are small, ~250 points per test, no
 significance testing — treat even the AAPL result as weak evidence. The platform is built to show you this rather than hide it.
 
+## Security
+No API keys are needed, and `.env`, databases and caches are git-ignored. The app validates all inputs, rate-limits requests, restricts CORS, sets security headers,
+hides Swagger/OpenAPI when `ENVIRONMENT=production`, and runs as a non-root user in Docker. **There is no authentication** — the watchlist/history are shared,
+so don't host a public instance for private use. Details and known gaps: [`SECURITY.md`](SECURITY.md).
+
 ## Project layout
 ```
 backend/app/   FastAPI app: api/ (routes), core/ (config, errors), schemas/, services/ (providers, data, indicators, prediction), database/
@@ -60,13 +96,13 @@ tests/         pytest suite     scripts/  benchmark, dev run, publish     docs/ 
 data/sample/   bundled historical CSVs from the original project (see note below)
 ```
 
-## API (see `/docs` for Swagger)
+## API (see `/docs` for Swagger — available except when `ENVIRONMENT=production`)
 `GET /api/stocks/search · /{symbol}/quote · /{symbol}/history · /{symbol}/indicators` · `GET /api/models` · `POST /api/predict` · `POST /api/compare` ·
 `GET|POST|DELETE /api/watchlist` · `GET|DELETE /api/history` · `GET /api/history/{id}/export.csv` · `GET /api/overview` · `GET /api/health`
 
 ## Testing status — what was and wasn't verified
 Verified in development (Linux sandbox, Python 3.12, `DATA_PROVIDER=csv`):
-* **32 automated tests pass** (indicators incl. no-look-ahead; feature leakage; walk-forward chronology/purging; "future data cannot change past predictions"; data validation & stale-cache; every API endpoint, error code, watchlist/history CRUD, rate limit, page rendering).
+* **37 automated tests pass** (indicators incl. no-look-ahead; security headers/secret hygiene; feature leakage; walk-forward chronology/purging; "future data cannot change past predictions"; data validation & stale-cache; every API endpoint, error code, watchlist/history CRUD, rate limit, page rendering).
   Two deliberate *mutation checks* (removing the purge; leaking a future value into a feature) made the leakage tests fail, as they should.
 * The real frontend JavaScript was executed in jsdom against a live server (25 behavioural checks: home, dashboard overlays/panels/custom range, predict, compare, watchlist, history). Plotly/Bootstrap were stubbed.
 

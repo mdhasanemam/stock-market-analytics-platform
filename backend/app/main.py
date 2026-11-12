@@ -42,8 +42,12 @@ class RateLimiter:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     setup_logging(settings.log_level)
+    is_prod = settings.environment.lower() == "production"
+    # In production the interactive API docs/schema are not exposed (smaller attack surface, no free API map for scanners).
     app = FastAPI(title=settings.app_name, version="1.0.0",
-                  description="Stock analytics and walk-forward ML forecasting. Educational use only - not investment advice.")
+                  description="Stock analytics and walk-forward ML forecasting. Educational use only - not investment advice.",
+                  docs_url=None if is_prod else "/docs", redoc_url=None if is_prod else "/redoc",
+                  openapi_url=None if is_prod else "/openapi.json")
     app.state.settings = settings
     app.state.db = Database(settings.database_url)
     app.state.data = DataService(get_provider(settings), settings)
@@ -57,6 +61,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if request.url.path.startswith("/api/") and not limiter.allow(request.client.host if request.client else "unknown"):
             return JSONResponse({"detail": "Rate limit exceeded. Please slow down."}, status_code=429)
         return await call_next(request)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        resp.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        return resp
 
     @app.exception_handler(SymbolNotFound)
     async def _nf(_, exc):  # noqa: ANN001
