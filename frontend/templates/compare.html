@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Model comparison</h1>
+<p class="text-secondary small">Every model is evaluated on the <em>same</em> chronological walk-forward windows and ranked by out-of-sample error. Naive baselines are always included — a model that cannot beat them has no demonstrated skill.</p>
+<form class="panel mb-3" id="form" autocomplete="off">
+  <div class="row g-3 align-items-end">
+    <div class="col-6 col-md-3"><label class="form-label small" for="symbol">Stock symbol</label><input id="symbol" list="symList" class="form-control" value="AAPL" maxlength="40" required><datalist id="symList"></datalist></div>
+    <div class="col-6 col-md-2"><label class="form-label small" for="period">History used</label><select id="period" class="form-select"><option value="2Y">2 years</option><option value="5Y" selected>5 years</option><option value="10Y">10 years</option><option value="MAX">Maximum</option></select></div>
+    <div class="col-6 col-md-2"><label class="form-label small" for="horizon">Horizon (days)</label><input id="horizon" type="number" min="1" max="30" value="5" class="form-control" required></div>
+    <div class="col-6 col-md-3 d-grid"><button class="btn btn-success" id="run"><i class="bi bi-bar-chart-steps"></i> Compare models</button></div>
+  </div>
+  <div class="mt-3 d-flex flex-wrap gap-3 small" id="modelBoxes"></div>
+</form>
+<div id="out"><div class="empty"><i class="bi bi-bar-chart-steps"></i>Pick a stock and run the comparison.</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+attachSymbolSearch($('#symbol'), $('#symList'));
+if (qs('symbol')) $('#symbol').value = parseSymbol(qs('symbol'));
+(async () => {
+  try {
+    const ms = (await api('/api/models')).models.filter((m) => m.kind === 'ml' || m.id === 'mean_reversion_ma20');
+    $('#modelBoxes').innerHTML = ms.map((m) => `<label class="form-check" title="${esc(m.description)}"><input class="form-check-input mb" type="checkbox" value="${m.id}" ${m.kind === 'ml' ? 'checked' : ''}> <span class="form-check-label">${esc(m.label)}</span></label>`).join('')
+      + '<span class="text-secondary">Persistence & drift baselines are always included.</span>';
+  } catch (e) { toast(e.message); }
+})();
+let last = null;
+$('#form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const out = $('#out'), btn = $('#run');
+  const models = $$('.mb:checked').map((x) => x.value);
+  const body = { symbol: parseSymbol($('#symbol').value), period: $('#period').value, horizon: parseInt($('#horizon').value, 10), models };
+  if (!body.symbol) return toast('Enter a ticker symbol.', 'warning');
+  if (!models.length) return toast('Select at least one model.', 'warning');
+  if (!(body.horizon >= 1 && body.horizon <= 30)) return toast('Horizon must be between 1 and 30 trading days.', 'warning');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Evaluating…';
+  out.innerHTML = '<div class="panel"><div class="skeleton mb-2" style="min-height:260px"></div><p class="legend-note mb-0">Training every model across all walk-forward windows — expect roughly 10–60 seconds, depending on the number of models and the hardware.</p></div>';
+  try { last = await api('/api/compare', { method: 'POST', body }); render(last); } catch (err) { showError(out, err.message); }
+  finally { btn.disabled = false; btn.innerHTML = '<i class="bi bi-bar-chart-steps"></i> Compare models'; }
+});
+
+function render(r) {
+  const rows = r.leaderboard.map((x, i) => {
+    const m = x.metrics, base = x.kind === 'baseline';
+    const badge = base ? '<span class="badge text-bg-secondary">baseline</span>' : x.beats_all_baselines ? '<span class="badge text-bg-success">beats both baselines</span>' : x.beats_persistence ? '<span class="badge text-bg-warning">beats persistence only</span>' : '<span class="badge text-bg-danger">no edge</span>';
+    return `<tr><td>${i + 1}</td><td class="fw-semibold">${esc(x.label)} ${x.id === r.best_ml_model ? '<i class="bi bi-trophy-fill text-warning" title="Best ML model by MAE"></i>' : ''}</td>
+      <td class="text-end">${fmt.num(m.mae, 3)}</td><td class="text-end">${fmt.num(m.rmse, 3)}</td><td class="text-end">${fmt.num(m.mse, 2)}</td><td class="text-end">${fmt.num(m.r2, 4)}</td>
+      <td class="text-end">${m.mape == null ? '—' : fmt.num(m.mape, 2) + '%'}</td><td class="text-end">${m.directional_accuracy == null ? '—' : (m.directional_accuracy * 100).toFixed(1) + '%'}</td>
+      <td class="text-end ${fmt.cls(m.mae_improvement_vs_persistence)}">${fmt.ratioPct(m.mae_improvement_vs_persistence)}</td><td class="text-end ${fmt.cls(m.mae_improvement_vs_drift)}">${fmt.ratioPct(m.mae_improvement_vs_drift)}</td><td>${badge}</td></tr>`;
+  }).join('');
+  const fails = r.failed.length ? `<div class="caveat mb-3">Some models failed: ${r.failed.map((f) => `${esc(f.label)} (${esc(f.error)})`).join('; ')}</div>` : '';
+  $('#out').innerHTML = `${fails}<div class="caveat mb-3"><strong>Summary:</strong> ${esc(r.summary)}</div>
+    <div class="panel mb-3"><h2>Leaderboard — ${esc(r.symbol)}, ${r.horizon}-day horizon <span class="legend-note">${r.n_test_points} out-of-sample forecasts · data through ${esc(r.as_of)}</span></h2>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr><th>#</th><th>Model</th><th class="text-end">MAE</th><th class="text-end">RMSE</th><th class="text-end">MSE</th><th class="text-end">R²</th><th class="text-end">MAPE</th><th class="text-end">Dir. acc.</th><th class="text-end">MAE vs persist.</th><th class="text-end">MAE vs drift</th><th>Verdict</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="legend-note mt-2 mb-0">Ranked by MAE (lower is better). R² on price levels is inflated for every model including the naive baseline. “Beats” = at least 2% lower MAE.</p></div>
+    <div class="row g-3"><div class="col-lg-5"><div class="panel"><h2>MAE by model</h2><div id="bar" class="chart"></div></div></div>
+    <div class="col-lg-7"><div class="panel"><h2>Actual vs predicted (out-of-sample)</h2><div id="lines" class="chart"></div><p class="legend-note mb-0">Click legend entries to show or hide models.</p></div></div></div>
+    <p class="legend-note mt-3">${esc(r.disclaimer)}</p>`;
+  draw(r);
+}
+function draw(r) {
+  const c = plotColors();
+  const ls = r.leaderboard;
+  Plotly.react('bar', [{ type: 'bar', orientation: 'h', y: ls.map((x) => x.label).reverse(), x: ls.map((x) => x.metrics.mae).reverse(),
+    marker: { color: ls.map((x) => x.kind === 'baseline' ? c.grey : x.beats_all_baselines ? c.up : c.blue).reverse() }, hovertemplate: '%{y}: %{x:.3f}<extra></extra>' }],
+    baseLayout({ height: 380, margin: { l: 175, r: 20, t: 10, b: 40 }, xaxis: { gridcolor: c.grid, title: 'MAE' }, hovermode: 'closest', showlegend: false }), plotConfig);
+  const palette = [c.orange, c.purple, c.accent, '#ff6b81', '#feca57', '#48dbfb', '#c8d6e5', '#1dd1a1'];
+  const tr = [{ type: 'scatter', mode: 'lines', x: r.series.dates, y: r.series.actual, name: 'Actual', line: { color: c.text, width: 2 } }];
+  Object.entries(r.series.predicted).forEach(([id, y], i) => {
+    const lab = (ls.find((x) => x.id === id) || {}).label || id;
+    tr.push({ type: 'scatter', mode: 'lines', x: r.series.dates, y, name: lab, visible: ['persistence', 'drift'].includes(id) ? 'legendonly' : true, line: { color: palette[i % palette.length], width: 1.2 } });
+  });
+  Plotly.react('lines', tr, baseLayout({ height: 380, legend: { orientation: 'h', y: -0.2 }, yaxis: { gridcolor: c.grid, title: 'Price' } }), plotConfig);
+}
+document.addEventListener('themechange', () => last && draw(last));
+</script>
+{% endblock %}

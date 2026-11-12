@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap gap-3 justify-content-between align-items-end mb-3">
+  <div><h1 class="h3 mb-0">Watchlist</h1><div class="text-secondary small">Latest daily bar for each tracked stock. Shared on this installation (no accounts).</div></div>
+  <form class="d-flex gap-2" id="addForm" autocomplete="off"><input id="sym" list="symList" class="form-control" placeholder="Add ticker" maxlength="40" aria-label="Add ticker" style="width:12rem"><datalist id="symList"></datalist><button class="btn btn-success">Add</button></form>
+</div>
+<div id="list" class="row g-3"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+attachSymbolSearch($('#sym'), $('#symList'));
+async function load() {
+  const box = $('#list'); showLoading(box, 1, 120);
+  try {
+    const { items } = await api('/api/watchlist');
+    if (!items.length) return showEmpty(box, 'bookmark', 'Your watchlist is empty. Add a ticker above.');
+    box.innerHTML = items.map((q) => `<div class="col-sm-6 col-lg-4 col-xl-3 position-relative">${stockCard(q)}
+      <button class="btn btn-sm btn-outline-danger position-absolute" style="right:1.4rem;bottom:1.1rem" data-rm="${esc(q.symbol)}" aria-label="Remove ${esc(q.symbol)}"><i class="bi bi-trash"></i></button></div>`).join('');
+    $$('[data-rm]').forEach((b) => b.addEventListener('click', async () => { try { await api(`/api/watchlist/${b.dataset.rm}`, { method: 'DELETE' }); load(); } catch (e) { toast(e.message); } }));
+  } catch (e) { showError(box, e.message); }
+}
+$('#addForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); const s = parseSymbol($('#sym').value); if (!s) return;
+  try { await api('/api/watchlist', { method: 'POST', body: { symbol: s } }); $('#sym').value = ''; load(); } catch (err) { toast(err.message, 'warning'); }
+});
+load();
+</script>
+{% endblock %}

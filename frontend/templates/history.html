@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Prediction history</h1>
+<p class="text-secondary small">Each forecast you run is stored with its model, horizon, metrics and configuration so experiments are reproducible. Stored forecasts are snapshots of what was predicted — compare them with what actually happened later.</p>
+<div class="panel"><div id="list"></div></div>
+<div class="modal fade" id="detail" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h2 class="modal-title h5" id="dTitle"></h2><button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body" id="dBody"></div></div></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const modal = () => bootstrap.Modal.getOrCreateInstance($('#detail'));
+async function load() {
+  const box = $('#list'); showLoading(box, 1, 120);
+  try {
+    const { items } = await api('/api/history');
+    if (!items.length) return showEmpty(box, 'clock-history', 'No saved predictions yet. Run one from the Predict page.');
+    box.innerHTML = `<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr><th>When (UTC)</th><th>Symbol</th><th>Model</th><th>Horizon</th><th>Data as of</th><th class="text-end">Forecast</th><th>For date</th><th class="text-end">MAE vs persist.</th><th></th></tr></thead><tbody>
+      ${items.map((x) => `<tr><td>${esc(x.created_at.slice(0, 16).replace('T', ' '))}</td><td class="fw-semibold">${esc(x.symbol)}</td><td>${esc(x.model)}</td><td>${x.horizon}d</td><td>${esc(x.as_of)}</td>
+      <td class="text-end">${fmt.num(x.forecast_point)}</td><td>${esc(x.forecast_date)}</td><td class="text-end ${fmt.cls(x.metrics.mae_improvement_vs_persistence)}">${fmt.ratioPct(x.metrics.mae_improvement_vs_persistence)}</td>
+      <td class="text-nowrap text-end"><button class="btn btn-sm btn-outline-secondary" data-v="${x.id}">View</button> <a class="btn btn-sm btn-outline-secondary" href="/api/history/${x.id}/export.csv" aria-label="Export CSV"><i class="bi bi-download"></i></a> <button class="btn btn-sm btn-outline-danger" data-d="${x.id}" aria-label="Delete"><i class="bi bi-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-v]').forEach((b) => b.addEventListener('click', () => view(b.dataset.v)));
+    $$('[data-d]').forEach((b) => b.addEventListener('click', async () => { if (!confirm('Delete this saved prediction?')) return; try { await api(`/api/history/${b.dataset.d}`, { method: 'DELETE' }); load(); } catch (e) { toast(e.message); } }));
+  } catch (e) { showError(box, e.message); }
+}
+async function view(id) {
+  try {
+    const r = await api(`/api/history/${id}`), f = r.forecast, m = r.metrics;
+    $('#dTitle').textContent = `${r.symbol} · ${r.config.model.label} · ${r.horizon}-day forecast`;
+    $('#dBody').innerHTML = `<p class="small text-secondary">Made on data through ${esc(r.as_of)} (source: ${esc(r.config.data_source)}; history ${esc(r.period)}). Future estimates — not guaranteed prices.</p>
+      <div class="row g-2 mb-3">${[['MAE', fmt.num(m.mae, 3)], ['RMSE', fmt.num(m.rmse, 3)], ['R²', fmt.num(m.r2, 4)], ['MAPE', m.mape == null ? '—' : fmt.num(m.mape, 2) + '%'], ['Dir. acc.', m.directional_accuracy == null ? '—' : (m.directional_accuracy * 100).toFixed(1) + '%'], ['MAE vs persist.', fmt.ratioPct(m.mae_improvement_vs_persistence)]].map(([k, v]) => `<div class="col-4 col-md-2"><div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div></div>`).join('')}</div>
+      <table class="table table-sm"><thead><tr><th>Date</th><th class="text-end">Forecast</th><th class="text-end">Lower</th><th class="text-end">Upper</th></tr></thead><tbody>
+      ${f.dates.map((d, i) => `<tr><td>${esc(d)}</td><td class="text-end">${fmt.num(f.path[i])}</td><td class="text-end">${f.lower ? fmt.num(f.lower[i]) : '—'}</td><td class="text-end">${f.upper ? fmt.num(f.upper[i]) : '—'}</td></tr>`).join('')}</tbody></table>
+      <details><summary class="small">Configuration</summary><pre class="small mt-2">${esc(JSON.stringify(r.config, null, 2))}</pre></details>`;
+    modal().show();
+  } catch (e) { toast(e.message); }
+}
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Machine-learning forecast</h1>
+<p class="text-secondary small">Models predict the <em>return</em> over the chosen horizon (not raw price levels) and are scored out-of-sample with walk-forward validation, then compared against naive baselines.</p>
+<form class="panel mb-3" id="form" autocomplete="off">
+  <div class="row g-3 align-items-end">
+    <div class="col-6 col-md-3"><label class="form-label small" for="symbol">Stock symbol</label><input id="symbol" list="symList" class="form-control" value="AAPL" maxlength="40" required><datalist id="symList"></datalist></div>
+    <div class="col-6 col-md-2"><label class="form-label small" for="period">History used</label>
+      <select id="period" class="form-select"><option value="2Y">2 years</option><option value="5Y" selected>5 years</option><option value="10Y">10 years</option><option value="MAX">Maximum</option></select></div>
+    <div class="col-6 col-md-3"><label class="form-label small" for="model">Model</label><select id="model" class="form-select"></select></div>
+    <div class="col-6 col-md-2"><label class="form-label small" for="horizon">Horizon (trading days)</label><input id="horizon" type="number" min="1" max="30" value="5" class="form-control" required></div>
+    <div class="col-12 col-md-2 d-grid"><button class="btn btn-success" id="run"><i class="bi bi-play-fill"></i> Run forecast</button></div>
+  </div>
+  <div class="small text-secondary mt-2" id="modelDesc"></div>
+</form>
+<div id="out"><div class="empty"><i class="bi bi-cpu"></i>Choose a stock, model and horizon, then run a forecast.</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+attachSymbolSearch($('#symbol'), $('#symList'));
+let MODELS = [];
+(async () => {
+  try {
+    MODELS = (await api('/api/models')).models;
+    const grp = (kind, label) => `<optgroup label="${label}">${MODELS.filter((m) => m.kind === kind).map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join('')}</optgroup>`;
+    $('#model').innerHTML = grp('ml', 'Machine learning') + grp('baseline', 'Baselines');
+    $('#model').value = 'bayesian_ridge'; showDesc();
+  } catch (e) { toast(e.message); }
+})();
+function showDesc() { const m = MODELS.find((x) => x.id === $('#model').value); $('#modelDesc').textContent = m ? m.description : ''; }
+$('#model').addEventListener('change', showDesc);
+if (qs('symbol')) $('#symbol').value = parseSymbol(qs('symbol'));
+let last = null;
+
+$('#form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const out = $('#out'), btn = $('#run');
+  const body = { symbol: parseSymbol($('#symbol').value), period: $('#period').value, model: $('#model').value, horizon: parseInt($('#horizon').value, 10) };
+  if (!body.symbol) return toast('Enter a ticker symbol.', 'warning');
+  if (!(body.horizon >= 1 && body.horizon <= 30)) return toast('Horizon must be between 1 and 30 trading days.', 'warning');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Evaluating…';
+  out.innerHTML = '<div class="panel"><div class="skeleton mb-2" style="min-height:60px"></div><div class="skeleton" style="min-height:420px"></div><p class="legend-note mt-2 mb-0">Running walk-forward evaluation (several refits) — this can take up to a minute for slower models.</p></div>';
+  try { last = await api('/api/predict', { method: 'POST', body }); render(last); }
+  catch (err) { showError(out, err.message); }
+  finally { btn.disabled = false; btn.innerHTML = '<i class="bi bi-play-fill"></i> Run forecast'; }
+});
+
+function render(r) {
+  const m = r.metrics, f = r.forecast, good = r.verdict.includes('lower than') && !r.verdict.includes('NOT');
+  const bad = r.verdict.includes('NOT clearly') || r.verdict.includes('NOT the simple');
+  const delta = f.point / r.last_close - 1;
+  const row = (k, v, hint = '') => `<tr><td>${k}${hint ? ` <i class="bi bi-info-circle text-secondary" title="${esc(hint)}"></i>` : ''}</td><td class="text-end fw-semibold">${v}</td></tr>`;
+  $('#out').innerHTML = `
+  ${r.warnings.length || r.stale ? `<div class="caveat mb-3">${esc(r.stale ? 'Live provider unavailable — cached data used. ' : '')}${esc(r.warnings.join(' '))}</div>` : ''}
+  <div class="caveat ${good ? 'verdict-good' : bad ? 'verdict-bad' : ''} mb-3"><strong>Backtest verdict:</strong> ${esc(r.verdict)}</div>
+  <div class="row g-3">
+    <div class="col-lg-8"><div class="panel">
+      <div class="d-flex flex-wrap justify-content-between mb-1"><h2 class="mb-0">${esc(r.symbol)} · ${esc(r.model.label)} · ${r.horizon}-day horizon</h2>
+      <span class="legend-note">data through ${esc(r.as_of)} · source: ${esc(r.data_source)}</span></div>
+      <div id="chart" class="chart chart-lg"></div>
+      <div class="legend-note mt-2">
+        <span class="dot" style="background:#7b8699"></span><b>Historical prices</b> · <span class="dot" style="background:#4c8dff"></span><b>Actual</b> vs <span class="dot" style="background:#ff9f43"></span><b>out-of-sample backtest</b> (each point predicted using only earlier data) ·
+        <span class="dot" style="background:#2dd4a7"></span><b>Future forecast</b> — an estimate, not a guaranteed price. No in-sample “fitted” line is shown on purpose: it would look better than reality.</div>
+    </div></div>
+    <div class="col-lg-4">
+      <div class="panel mb-3"><h2>Forecast</h2>
+        <div class="price">${fmt.num(f.point)} <span class="fs-6 ${fmt.cls(delta)}">${fmt.pct(delta * 100)}</span></div>
+        <div class="small text-secondary">for ~${esc(f.horizon_date)} (${r.horizon} trading days after ${esc(r.as_of)}; last close ${fmt.num(r.last_close)})</div>
+        ${f.interval.supported ? `<div class="mt-2 small"><b>${Math.round(f.interval.coverage * 100)}% interval:</b> ${fmt.num(f.lower.at(-1))} – ${fmt.num(f.upper.at(-1))}<div class="text-secondary">${esc(f.interval.method)}</div></div>`
+          : `<div class="mt-2 small text-secondary">No prediction interval: ${esc(f.interval.reason)}</div>`}
+        <div class="d-flex gap-2 mt-3 flex-wrap">
+          ${r.saved_id ? `<a class="btn btn-sm btn-outline-secondary" href="/api/history/${r.saved_id}/export.csv"><i class="bi bi-download"></i> CSV</a>` : ''}
+          <button class="btn btn-sm btn-outline-secondary" id="watch"><i class="bi bi-bookmark-plus"></i> Watchlist</button></div></div>
+      <div class="panel mb-3"><h2>Out-of-sample metrics <span class="legend-note">(${m.n_test_points} forecasts, ${esc(r.config.test_start)} → ${esc(r.config.test_end)})</span></h2>
+        <table class="table table-sm mb-0"><tbody>
+          ${row('MAE', fmt.num(m.mae, 3), 'Mean absolute error of forecast price')}${row('RMSE', fmt.num(m.rmse, 3))}${row('MSE', fmt.num(m.mse, 3))}
+          ${row('R² (price)', fmt.num(m.r2, 4), 'On price levels R² is high even for naive forecasts — do not read it as skill.')}
+          ${row('MAPE', m.mape == null ? '—' : fmt.num(m.mape, 2) + '%')}
+          ${row('Directional accuracy', m.directional_accuracy == null ? 'n/a (no direction)' : (m.directional_accuracy * 100).toFixed(1) + '%', '50% is a coin flip')}
+          ${row('Return skill vs persistence', fmt.ratioPct(m.return_skill_vs_persistence), 'Out-of-sample R² of the return forecast relative to predicting 0%. >0 is better.')}
+          ${row('MAE vs persistence', fmt.ratioPct(m.mae_improvement_vs_persistence), 'Positive = lower error than "price stays the same"')}
+          ${row('MAE vs historical drift', fmt.ratioPct(m.mae_improvement_vs_drift), 'Positive = lower error than "grows at its average rate"')}
+        </tbody></table></div>
+      <div class="panel"><h2>Model & setup</h2><p class="small mb-2">${esc(r.model.description)}</p>
+        <ul class="small text-secondary mb-0"><li>Target: ${esc(r.config.target)}</li><li>Refit every ${r.config.refit_every} days (${r.config.n_refits} refits), max train window ${r.config.train_window}</li>
+        <li>Final model trained on outcomes known through ${esc(f.trained_through)}</li><li>History period: ${esc(r.period)}</li></ul></div>
+    </div>
+  </div>
+  <p class="legend-note mt-3">${esc(r.disclaimer)}</p>`;
+  $('#watch')?.addEventListener('click', async () => { try { await api('/api/watchlist', { method: 'POST', body: { symbol: r.symbol } }); toast(`${r.symbol} added to watchlist.`, 'success'); } catch (e) { toast(e.message, 'warning'); } });
+  draw(r);
+}
+
+function draw(r) {
+  const c = plotColors(), f = r.forecast, traces = [];
+  traces.push({ type: 'scatter', mode: 'lines', x: r.history.dates, y: r.history.close, name: 'Historical close', line: { color: c.grey, width: 1.4 } });
+  traces.push({ type: 'scatter', mode: 'lines', x: r.backtest.dates, y: r.backtest.actual, name: 'Actual (backtest window)', line: { color: c.blue, width: 1.8 } });
+  traces.push({ type: 'scatter', mode: 'lines', x: r.backtest.dates, y: r.backtest.predicted, name: 'Out-of-sample predicted', line: { color: c.orange, width: 1.6, dash: 'dash' } });
+  const fx = [r.as_of, ...f.dates];
+  if (f.lower) {
+    traces.push({ type: 'scatter', mode: 'lines', x: fx, y: [r.last_close, ...f.upper], line: { width: 0 }, showlegend: false, hoverinfo: 'skip' });
+    traces.push({ type: 'scatter', mode: 'lines', x: fx, y: [r.last_close, ...f.lower], fill: 'tonexty', fillcolor: 'rgba(45,212,167,.16)', line: { width: 0 }, name: `${Math.round(f.interval.coverage * 100)}% interval`, hoverinfo: 'skip' });
+  }
+  traces.push({ type: 'scatter', mode: 'lines+markers', x: fx, y: [r.last_close, ...f.path], name: 'Future forecast', line: { color: c.accent, width: 2.4, dash: 'dot' }, marker: { size: 5 } });
+  Plotly.react('chart', traces, baseLayout({ height: 540, yaxis: { gridcolor: c.grid, title: 'Price' },
+    shapes: [{ type: 'line', x0: r.as_of, x1: r.as_of, yref: 'paper', y0: 0, y1: 1, line: { color: c.grey, width: 1, dash: 'dash' } }],
+    annotations: [{ x: r.as_of, yref: 'paper', y: 1, text: 'last data', showarrow: false, yanchor: 'bottom', font: { size: 10, color: c.grey } }] }), plotConfig);
+}
+document.addEventListener('themechange', () => last && draw(last));
+</script>
+{% endblock %}

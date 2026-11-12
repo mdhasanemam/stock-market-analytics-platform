@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap gap-3 align-items-end justify-content-between mb-3">
+  <div>
+    <div id="titleBlock"><h1 class="h3 mb-0">Dashboard</h1><div class="text-secondary small">Search a ticker to begin.</div></div>
+  </div>
+  <form class="d-flex gap-2" id="symForm" autocomplete="off">
+    <input id="symInput" list="symList" class="form-control" placeholder="Ticker or company" maxlength="40" aria-label="Ticker" style="width:14rem"><datalist id="symList"></datalist>
+    <button class="btn btn-success">Load</button>
+  </form>
+</div>
+
+<div id="statsRow" class="row g-2 mb-3"></div>
+<div id="dataNotes"></div>
+
+<div class="panel mb-3">
+  <div class="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-2">
+    <div class="range-btns btn-group" role="group" aria-label="Time range" id="rangeBtns">
+      {% for r in ["1D","1W","1M","3M","6M","1Y","5Y","MAX"] %}<button type="button" class="btn btn-outline-secondary" data-range="{{ r }}">{{ r }}</button>{% endfor %}
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      <input type="date" class="form-control form-control-sm" id="dStart" aria-label="Start date"><span class="text-secondary">→</span>
+      <input type="date" class="form-control form-control-sm" id="dEnd" aria-label="End date">
+      <button class="btn btn-sm btn-outline-success" id="applyCustom">Apply</button>
+    </div>
+  </div>
+  <div class="d-flex flex-wrap gap-3 small mb-2" id="toggles">
+    <select id="chartType" class="form-select form-select-sm w-auto" aria-label="Chart type"><option value="candle">Candlestick</option><option value="line">Line</option></select>
+    <span class="text-secondary align-self-center">Overlays:</span>
+    {% for k, l in [("sma20","SMA 20"),("sma50","SMA 50"),("ema20","EMA 20"),("bollinger","Bollinger")] %}<label class="form-check"><input class="form-check-input ov" type="checkbox" value="{{ k }}"> <span class="form-check-label">{{ l }}</span></label>{% endfor %}
+    <span class="text-secondary align-self-center ms-2">Panels:</span>
+    {% for k, l in [("volume","Volume"),("rsi","RSI"),("macd","MACD"),("atr","ATR"),("obv","OBV")] %}<label class="form-check"><input class="form-check-input pn" type="checkbox" value="{{ k }}" {{ 'checked' if k=='volume' }}> <span class="form-check-label">{{ l }}</span></label>{% endfor %}
+  </div>
+  <div id="chart" class="chart chart-lg"></div>
+</div>
+
+<div class="d-flex gap-2 mb-4">
+  <a class="btn btn-outline-success btn-sm" id="toPredict" href="/predict"><i class="bi bi-cpu"></i> Forecast this stock</a>
+  <button class="btn btn-outline-secondary btn-sm" id="addWatch"><i class="bi bi-bookmark-plus"></i> Add to watchlist</button>
+</div>
+
+<div class="panel">
+  <h2>Indicator guide</h2>
+  <div class="accordion accordion-flush" id="guide"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', path='js/dashboard.js') }}"></script>
+{% endblock %}

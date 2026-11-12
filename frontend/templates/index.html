@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <span class="badge text-bg-dark border mb-3"><i class="bi bi-shield-check text-accent"></i> Walk-forward validated · baseline-checked</span>
+  <h1>Market analytics with forecasts<br>you can actually <span class="text-accent">audit</span>.</h1>
+  <p class="lead mt-3">Explore prices and technical indicators, then test six machine-learning models against naive baselines with chronological validation — no shuffled splits, no look-ahead.</p>
+  <form class="row g-2 mt-3" id="heroSearch" autocomplete="off" style="max-width:34rem">
+    <div class="col"><input id="heroSymbol" list="heroSymbols" class="form-control form-control-lg" placeholder="Ticker or company, e.g. AAPL" maxlength="40" aria-label="Search stock"><datalist id="heroSymbols"></datalist></div>
+    <div class="col-auto"><button class="btn btn-lg btn-success">Analyze</button></div>
+  </form>
+</section>
+
+<section class="mb-4">
+  <div class="d-flex justify-content-between align-items-end mb-2"><h2 class="h5 mb-0">Featured stocks</h2><a href="/dashboard" class="small">Open dashboard →</a></div>
+  <div class="row g-3" id="featured"><div class="col-12"><div class="skeleton" style="min-height:150px"></div></div></div>
+  <p class="legend-note mt-2" id="trendNote"></p>
+</section>
+
+<section class="row g-3 mt-2">
+  {% for icon, title, text in [
+    ("bar-chart-line","Interactive dashboard","Candlesticks, volume, SMA/EMA, Bollinger Bands, RSI, MACD, ATR and OBV with custom date ranges."),
+    ("cpu","Six ML models + baselines","KNN, Random Forest, Bayesian Ridge, Decision Tree, Gradient Boosting and SVR — always scored against persistence and drift."),
+    ("shield-check","Honest evaluation","Predicts returns, purges overlapping targets, reports directional accuracy and whether a model really beats naive forecasts."),
+    ("bookmark-star","Watchlist & history","Track tickers and keep every prediction experiment with its configuration and metrics.")] %}
+  <div class="col-md-6 col-lg-3"><div class="panel feature h-100"><i class="bi bi-{{ icon }}"></i><h3 class="mt-2">{{ title }}</h3><p class="small text-secondary mb-0">{{ text }}</p></div></div>
+  {% endfor %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+attachSymbolSearch($('#heroSymbol'), $('#heroSymbols'));
+$('#heroSearch').addEventListener('submit', (e) => { e.preventDefault(); const s = parseSymbol($('#heroSymbol').value); if (s) location.href = `/dashboard?symbol=${encodeURIComponent(s)}`; });
+(async () => {
+  const box = $('#featured');
+  try {
+    const o = await api('/api/overview');
+    if (!o.featured.length) return showEmpty(box, 'cloud-slash', 'Market data is currently unavailable. Try again shortly.');
+    const trend = Object.fromEntries(o.trend.map((t) => [t.symbol, t.trend]));
+    box.innerHTML = o.featured.map((q) => `<div class="col-sm-6 col-lg-3">${stockCard(q, `<span class="badge badge-trend badge-${trend[q.symbol]} align-self-start">${trend[q.symbol]}</span>`)}</div>`).join('');
+    $('#trendNote').textContent = 'Trend label compares the last close with its 50-day average (±2%). It is descriptive, not a prediction.';
+  } catch (e) { showError(box, e.message); }
+})();
+</script>
+{% endblock %}
